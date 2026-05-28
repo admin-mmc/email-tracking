@@ -1,16 +1,15 @@
 const express = require('express');
 const app = express();
+
 const PORT = process.env.PORT || 3000;
 
-// Header de um GIF 1x1 transparente válido
 const GIF_HEADER = Buffer.from(
-  '474946383961010001008000000000000000002c00000000010001000002024401003b',
+  '474946383961010001008000000000000000002c0000000001000100000202440100',
   'hex'
 );
 
-// Frame GIF mínimo válido para continuar a animação
 const GIF_FRAME = Buffer.from(
-  '2c00000000010001000002024401003b',
+  '2c0000000001000100000202440100',
   'hex'
 );
 
@@ -18,39 +17,56 @@ app.get('/track', (req, res) => {
   const id = req.query.id || 'unknown';
   const startTime = Date.now();
 
-  console.log(`[ABRIU] id=${id} at=${new Date().toISOString()}`);
+  console.log(`[ABRIU] ${id}`);
 
   res.setHeader('Content-Type', 'image/gif');
   res.setHeader('Cache-Control', 'no-store, no-cache');
   res.setHeader('Transfer-Encoding', 'chunked');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
 
-  // Envia o header do GIF imediatamente
+  res.flushHeaders();
+
   res.write(GIF_HEADER);
 
   let seconds = 0;
 
   const interval = setInterval(() => {
-    seconds += 10;
+    seconds += 2;
 
-    try {
-      res.write(GIF_FRAME);
-      console.log(`[AINDA ABERTO] id=${id} seconds=${seconds}`);
-    } catch (e) {
+    if (res.destroyed) {
       clearInterval(interval);
+      return;
     }
-  }, 10000);
+
+    console.log(`[ABERTO] ${id} ${seconds}s`);
+
+    res.write(GIF_FRAME);
+
+    // encerra após 60s
+    if (seconds >= 60) {
+      clearInterval(interval);
+
+      // trailer final do GIF
+      res.end(Buffer.from('3b', 'hex'));
+
+      console.log(`[FINALIZADO] ${id}`);
+    }
+  }, 2000);
 
   req.on('close', () => {
     clearInterval(interval);
+
     const total = Math.round((Date.now() - startTime) / 1000);
-    console.log(`[FECHOU] id=${id} total=${total}s`);
+
+    console.log(`[FECHOU] ${id} total=${total}s`);
   });
 });
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+const server = app.listen(PORT, () => {
+  console.log(`rodando ${PORT}`);
 });
 
-app.listen(PORT, () => {
-  console.log(`Email tracker rodando na porta ${PORT}`);
-});
+server.keepAliveTimeout = 0;
+server.requestTimeout = 0;
+server.headersTimeout = 0;
