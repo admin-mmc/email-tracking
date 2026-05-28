@@ -22,41 +22,48 @@ app.get('/track', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache');
   res.setHeader('Transfer-Encoding', 'chunked');
 
-  // Envia header imediatamente
   res.write(GIF_HEADER);
 
-  // Ping a cada 2s para detectar fechamento mais rápido
   const INTERVAL_MS = 2000;
   let elapsed = 0;
   let closed = false;
+
+  function encerrar() {
+    if (closed) return;
+    closed = true;
+    clearInterval(interval);
+    const total = Math.round((Date.now() - startTime) / 1000);
+    const isHuman = total >= 10;
+    console.log(`[FECHOU] id=${id} total=${total}s human=${isHuman}`);
+  }
 
   const interval = setInterval(() => {
     if (closed) return clearInterval(interval);
 
     elapsed += INTERVAL_MS;
 
-    try {
-      res.write(GIF_FRAME);
+    // Verifica se conexão ainda está viva
+    if (res.destroyed || req.destroyed) {
+      return encerrar();
+    }
 
-      // Loga só a cada 10s para não poluir
-      if (elapsed % 10000 === 0) {
-        console.log(`[AINDA ABERTO] id=${id} seconds=${elapsed / 1000}`);
-      }
-    } catch (e) {
-      clearInterval(interval);
+    const ok = res.write(GIF_FRAME);
+
+    // Se write retornou false, conexão está morta
+    if (!ok && !res.destroyed) {
+      res.end();
+      return encerrar();
+    }
+
+    if (elapsed % 10000 === 0) {
+      console.log(`[AINDA ABERTO] id=${id} seconds=${elapsed / 1000}`);
     }
   }, INTERVAL_MS);
 
-  req.on('close', () => {
-    if (closed) return;
-    closed = true;
-    clearInterval(interval);
-
-    const total = Math.round((Date.now() - startTime) / 1000);
-    const isHuman = total >= 10;
-
-    console.log(`[FECHOU] id=${id} total=${total}s human=${isHuman}`);
-  });
+  // Três eventos para garantir que captura o fechamento
+  req.on('close', encerrar);
+  req.on('end', encerrar);
+  res.on('close', encerrar);
 });
 
 app.get('/health', (req, res) => {
