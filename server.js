@@ -2,6 +2,8 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const MAX_DURATION_S = 180; // ← muda aqui para testar durações diferentes
+
 const GIF_HEADER = Buffer.from(
   '474946383961010001008000000000000000002c00000000010001000002024401003b',
   'hex'
@@ -19,6 +21,7 @@ app.get('/track', (req, res) => {
   res.setHeader('Content-Type', 'image/gif');
   res.setHeader('Cache-Control', 'no-store, no-cache');
   res.setHeader('Transfer-Encoding', 'chunked');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.write(GIF_HEADER);
 
   let seconds = 0;
@@ -26,14 +29,14 @@ app.get('/track', (req, res) => {
     seconds += 5;
     try {
       res.write(GIF_FRAME);
-      console.log(`[AINDA ABERTO] id=${id} seconds=${seconds}`);
+      console.log(`[ABERTO] id=${id} seconds=${seconds}`);
     } catch (e) {
       clearInterval(interval);
     }
-    if (seconds >= 180) {
+    if (seconds >= MAX_DURATION_S) {
       clearInterval(interval);
       res.end(Buffer.from('3b', 'hex'));
-      console.log(`[FINALIZADO] id=${id} total=180s`);
+      console.log(`[FINALIZADO] id=${id} total=${seconds}s`);
     }
   }, 5000);
 
@@ -49,5 +52,5 @@ app.get('/health', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Email tracker rodando na porta ${PORT}`);
+  console.log(`[tracker] porta=${PORT} max=${MAX_DURATION_S}s`);
 });
