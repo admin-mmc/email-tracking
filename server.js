@@ -1,5 +1,4 @@
 const express = require('express');
-const http    = require('http');
 const app     = express();
 const PORT    = process.env.PORT || 3000;
 const MAX_DURATION_S = 180;
@@ -13,40 +12,19 @@ const GIF_FRAME = Buffer.from(
   'hex'
 );
 
-// ── Configuração dos steps de tempo ───────────────────────────────────────
+// ── Steps: cada um segura a conexão por `delay` ms antes de redirecionar ──
 const STEPS = [
-  { step: 1, delay: 4000,  label: 'abriu'   },  // 0s  - abriu
-  { step: 2, delay: 4000,  label: 'scan'    },  // 4s  - ainda olhando
-  { step: 3, delay: 5000,  label: 'leu'     },  // 8s  - leu algo
-  { step: 4, delay: 5000,  label: 'engajou' },  // 13s - leu com atenção
+  { step: 1, delay: 4000,  label: 'abriu'   },  //  0s
+  { step: 2, delay: 4000,  label: 'scan'    },  //  4s
+  { step: 3, delay: 5000,  label: 'leu'     },  //  8s
+  { step: 4, delay: 5000,  label: 'engajou' },  // 13s → entra no GIF
 ];
 
-// ── Pinga o IP de volta via HTTP e loga tudo que retornar ──────────────────
-function pingBack(ip, id) {
-  const urls = [
-    `http://${ip}/`,
-    `http://${ip}:80/`,
-    `http://${ip}:8080/`,
-  ];
-  urls.forEach(url => {
-    const req = http.get(url, { timeout: 3000 }, (res) => {
-      let body = '';
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => {
-        console.log(`[PINGBACK] id=${id} ip=${ip} url=${url} status=${res.statusCode} headers=${JSON.stringify(res.headers)} body=${body.slice(0, 200)}`);
-      });
-    });
-    req.on('error', (e) => {
-      console.log(`[PINGBACK_ERRO] id=${id} ip=${ip} url=${url} erro=${e.message}`);
-    });
-    req.on('timeout', () => {
-      console.log(`[PINGBACK_TIMEOUT] id=${id} ip=${ip} url=${url}`);
-      req.destroy();
-    });
-  });
+function ts() {
+  return new Date().toISOString();
 }
 
-// ── Rota dos redirects temporizados ───────────────────────────────────────
+// ── Redirects temporizados ────────────────────────────────────────────────
 app.get('/t/:step', (req, res) => {
   const id      = req.query.id || 'unknown';
   const stepNum = parseInt(req.params.step);
@@ -60,38 +38,35 @@ app.get('/t/:step', (req, res) => {
     return res.redirect(307, `/track?id=${id}`);
   }
 
-  console.log(`[STEP] id=${id} step=${stepNum} label=${current.label} ip=${ip}`);
+  const stepStart = Date.now();
+  console.log(`${ts()} [STEP:${current.label.toUpperCase()}] id=${id} step=${stepNum} ip=${ip}`);
 
   const timer = setTimeout(() => {
     if (res.writableEnded) return;
-
-    const nextUrl = next
-      ? `/t/${next.step}?id=${id}`
-      : `/track?id=${id}`;
-
     res.setHeader('Cache-Control', 'no-store, no-cache');
-    res.redirect(307, nextUrl);
+    res.redirect(307, next ? `/t/${next.step}?id=${id}` : `/track?id=${id}`);
   }, current.delay);
 
   req.on('close', () => {
     clearTimeout(timer);
-    console.log(`[FECHOU_NO_STEP] id=${id} step=${stepNum} label=${current.label}`);
+    const spent = ((Date.now() - stepStart) / 1000).toFixed(2);
+    // só loga como abandono se o timer ainda não tinha disparado
+    if (!res.writableEnded) {
+      console.log(`${ts()} [ABANDONOU] id=${id} step=${stepNum} label=${current.label} tempo_no_step=${spent}s`);
+    }
   });
 });
 
-// ── Rota principal de tracking (GIF infinito) ─────────────────────────────
+// ── GIF infinito — mede tempo real aberto ────────────────────────────────
 app.get('/track', (req, res) => {
-  const id       = req.query.id || 'unknown';
-  const ip       = req.headers['x-forwarded-for']?.split(',')[0].trim()
-                || req.socket.remoteAddress;
-  const ua       = req.headers['user-agent'] || 'sem-ua';
-  const allHeaders = JSON.stringify(req.headers);
-  const startTime  = Date.now();
+  const id        = req.query.id || 'unknown';
+  const ip        = req.headers['x-forwarded-for']?.split(',')[0].trim()
+                 || req.socket.remoteAddress;
+  const ua        = req.headers['user-agent'] || 'sem-ua';
+  const startTime = Date.now();
 
-  console.log(`[ABRIU] id=${id} ip=${ip} ua=${ua}`);
-  console.log(`[HEADERS] id=${id} ${allHeaders}`);
-
-  pingBack(ip, id);
+  console.log(`${ts()} [GIF:INICIO] id=${id} ip=${ip}`);
+  console.log(`${ts()} [GIF:UA]     id=${id} ua=${ua}`);
 
   res.setHeader('Content-Type',      'image/gif');
   res.setHeader('Cache-Control',     'no-store, no-cache');
@@ -100,35 +75,37 @@ app.get('/track', (req, res) => {
   res.write(GIF_HEADER);
 
   let seconds = 0;
+
   const interval = setInterval(() => {
     seconds += 5;
     try {
       res.write(GIF_FRAME);
-      console.log(`[ABERTO] id=${id} seconds=${seconds}`);
-    } catch (e) {
+      console.log(`${ts()} [GIF:PULSO]  id=${id} aberto=${seconds}s`);
+    } catch {
       clearInterval(interval);
     }
     if (seconds >= MAX_DURATION_S) {
       clearInterval(interval);
       res.end(Buffer.from('3b', 'hex'));
-      console.log(`[FINALIZADO] id=${id} total=${seconds}s`);
+      console.log(`${ts()} [GIF:LIMITE] id=${id} atingiu max=${MAX_DURATION_S}s`);
     }
   }, 5000);
 
   req.on('close', () => {
     clearInterval(interval);
-    const total = Math.round((Date.now() - startTime) / 1000);
-    console.log(`[FECHOU] id=${id} ip=${ip} total=${total}s`);
-    pingBack(ip, id + '_close');
+    const total = ((Date.now() - startTime) / 1000).toFixed(2);
+    // último pulso registrado + tempo exato de fechamento
+    const ultimoPulso = seconds;
+    console.log(`${ts()} [GIF:FECHOU] id=${id} ip=${ip} ultimo_pulso=${ultimoPulso}s tempo_real=${total}s`);
   });
 });
 
-// ── Health check ──────────────────────────────────────────────────────────
+// ── Health ────────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-// ── Servidor ──────────────────────────────────────────────────────────────
+// ── Start ─────────────────────────────────────────────────────────────────
 const server = app.listen(PORT, () => {
-  console.log(`[tracker] porta=${PORT} max=${MAX_DURATION_S}s`);
+  console.log(`${ts()} [SERVER] porta=${PORT} max=${MAX_DURATION_S}s`);
 });
 
 server.keepAliveTimeout = 0;
