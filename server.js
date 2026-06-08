@@ -101,7 +101,7 @@ app.get('/track', (req, res) => {
 });
 
 app.get('/unsubscribe', (req, res) => {
-  res.sendFile(path.join(__dirname, 'unsubscribe.html'))
+  res.sendFile(path.join(__dirname, 'index.html'))
 })
 // ── Health ────────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ ok: true }));
